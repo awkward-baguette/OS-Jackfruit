@@ -1,111 +1,115 @@
-# Multi-Container Runtime
+# Multi-Container Runtime (Tasks 4, 5, 6)
 
-A lightweight Linux container runtime in C with a long-running supervisor and a kernel-space memory monitor.
-
-Read [`project-guide.md`](project-guide.md) for the full project specification.
+This project implements a kernel-space memory monitor and scheduling experiments as part of a lightweight container runtime.
 
 ---
 
-## Getting Started
+## Task 4: Kernel Memory Monitoring
 
-### 1. Fork the Repository
+We implemented a Linux Kernel Module (`monitor.c`) to track container processes and enforce memory limits.
 
-1. Go to [github.com/shivangjhalani/OS-Jackfruit](https://github.com/shivangjhalani/OS-Jackfruit)
-2. Click **Fork** (top-right)
-3. Clone your fork:
+### Features
 
-```bash
-git clone https://github.com/<your-username>/OS-Jackfruit.git
-cd OS-Jackfruit
-```
+- Device created at `/dev/container_monitor`
+- Supervisor registers container PIDs using `ioctl`
+- Kernel maintains a linked list of monitored containers
+- Thread-safe list access using mutex
+- Periodic monitoring using a timer
 
-### 2. Set Up Your VM
+### Memory Monitoring
 
-You need an **Ubuntu 22.04 or 24.04** VM with **Secure Boot OFF**. WSL will not work.
+- RSS (Resident Set Size) is measured using `get_mm_rss()`
+- Memory usage is calculated in bytes
 
-Install dependencies:
+### Policies
 
-```bash
-sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
-```
+**Soft Limit**
+- Logs a warning when memory exceeds the soft limit
+- Triggered only once per container
 
-### 3. Run the Environment Check
+**Hard Limit**
+- Process is killed using `SIGKILL` when hard limit is exceeded
+- Entry is removed from the list
 
-```bash
-cd boilerplate
-chmod +x environment-check.sh
-sudo ./environment-check.sh
-```
+### Additional Behavior
 
-Fix any issues reported before moving on.
-
-### 4. Prepare the Root Filesystem
-
-```bash
-mkdir rootfs-base
-wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
-tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
-
-# Make one writable copy per container you plan to run
-cp -a ./rootfs-base ./rootfs-alpha
-cp -a ./rootfs-base ./rootfs-beta
-```
-
-Do not commit `rootfs-base/` or `rootfs-*` directories to your repository.
-
-### 5. Understand the Boilerplate
-
-The `boilerplate/` folder contains starter files:
-
-| File                   | Purpose                                             |
-| ---------------------- | --------------------------------------------------- |
-| `engine.c`             | User-space runtime and supervisor skeleton          |
-| `monitor.c`            | Kernel module skeleton                              |
-| `monitor_ioctl.h`      | Shared ioctl command definitions                    |
-| `Makefile`             | Build targets for both user-space and kernel module |
-| `cpu_hog.c`            | CPU-bound test workload                             |
-| `io_pulse.c`           | I/O-bound test workload                             |
-| `memory_hog.c`         | Memory-consuming test workload                      |
-| `environment-check.sh` | VM environment preflight check                      |
-
-Use these as your starting point. You are free to restructure the repository however you want — the submission requirements are listed in the project guide.
-
-### 6. Build and Verify
-
-```bash
-cd boilerplate
-make
-```
-
-If this compiles without errors, your environment is ready.
-
-### 7. GitHub Actions Smoke Check
-
-Your fork will inherit a minimal GitHub Actions workflow from this repository.
-
-That workflow only performs CI-safe checks:
-
-- `make -C boilerplate ci`
-- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
-- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
-
-The CI-safe build command is:
-
-```bash
-make -C boilerplate ci
-```
-
-This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
+- Automatically removes entries for exited processes
+- Supports register and unregister using ioctl
+- Uses safe list iteration to avoid race conditions
 
 ---
 
-## What to Do Next
+## Task 5: Scheduler Experiments
 
-Read [`project-guide.md`](project-guide.md) end to end. It contains:
+We implemented two workloads to analyze Linux scheduling behavior.
 
-- The six implementation tasks (multi-container runtime, CLI, logging, kernel monitor, scheduling experiments, cleanup)
-- The engineering analysis you must write
-- The exact submission requirements, including what your `README.md` must contain (screenshots, analysis, design decisions)
+### Workloads
 
-Your fork's `README.md` should be replaced with your own project documentation as described in the submission package section of the project guide. (As in get rid of all the above content and replace with your README.md)
+**1. CPU-bound workload (`cpu_hog.c`)**
+- Performs continuous computation
+- Fully utilizes CPU
+
+**2. I/O-bound workload (`io_pulse.c`)**
+- Writes to a file and sleeps
+- Simulates I/O-heavy behavior
+
+---
+
+### Experiment 1: CPU vs CPU (Different Priorities)
+
+Two CPU-bound containers were executed with different priorities:
+
+- Container A: nice = -5 (higher priority)
+- Container B: nice = 10 (lower priority)
+
+**Observation:**
+- Container A received more CPU time
+- Container B executed slower
+
+---
+
+### Experiment 2: CPU vs I/O
+
+A CPU-bound and I/O-bound container were run simultaneously.
+
+**Observation:**
+- CPU-bound process consumed most CPU
+- I/O-bound process remained responsive due to sleep intervals
+
+---
+
+### Conclusion
+
+Linux uses the **Completely Fair Scheduler (CFS)**:
+- Ensures fair CPU allocation
+- Prioritizes lower nice values
+- Maintains responsiveness for I/O-bound workloads
+
+---
+
+## Task 6: Resource Cleanup
+
+The system ensures proper cleanup in both kernel and user space.
+
+### Kernel Cleanup
+
+- Timer is stopped using `del_timer_sync`
+- All linked list entries are removed and freed using `kfree`
+- Device `/dev/container_monitor` is destroyed properly
+- No memory leaks remain after module unload
+
+---
+
+### User-Space Cleanup
+
+- Supervisor uses `waitpid` to prevent zombie processes
+- Logging threads terminate cleanly
+- File descriptors are properly closed
+
+---
+
+### Result
+
+- No zombie processes remain
+- No memory leaks in kernel or user space
+- Clean shutdown of all components
