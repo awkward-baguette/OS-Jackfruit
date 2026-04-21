@@ -1,8 +1,53 @@
-# Multi-Container Runtime (Tasks 4, 5, 6)
+# Multi-Container Runtime 
 
 This project implements a kernel-space memory monitor and scheduling experiments as part of a lightweight container runtime.
 
 ---
+## Task 1: Environment and Core Structures
+This stage focused on establishing the foundational environment and the internal data structures required to track isolated processes.
+
+### Features
+* **Environment Setup:** Utilized Oracle VirtualBox with Ubuntu 24.04 and Alpine Linux minirootfs to create a lightweight, isolated filesystem.
+* **Internal Metadata:** Implemented a `container_record_t` structure to track essential container state:
+    * **Container ID:** Human-readable nickname (e.g., alpha, beta).
+    * **Host-side PID:** The unique process identifier assigned by the Linux kernel.
+    * **Execution Status:** Tracks lifecycle states including `Running`, `Exited`, and `Killed`.
+    * **Resource Configuration:** Stores soft and hard memory limits for enforcement.
+* **Thread-Safe Management:** Utilized a linked list guarded by **pthread mutex locks** to manage active containers safely within the supervisor’s memory.
+
+---
+
+## Task 2: Multi-Container Supervision & IPC
+We implemented the primary supervisor-client architecture, allowing for the concurrent management of multiple containers through robust Inter-Process Communication (IPC).
+
+### Supervision Logic
+* **Double Forking:** Implemented a `fork()` and `execve()` flow to spawn containerized processes within their own unique root filesystems.
+* **Unix Domain Sockets:** Established the primary IPC mechanism via a socket (located at `/tmp/mini_runtime.sock`), enabling the CLI tool to communicate with the background supervisor.
+* **Command Protocol:**
+    * `start`: Instructs the supervisor to spawn a new container.
+    * `ps`: Queries the internal linked list to retrieve real-time container metadata.
+    * `stop/logs`: Manages the lifecycle and output retrieval of specific containers.
+
+### Namespace & Isolation
+* **Mount Isolation:** Used `chroot` logic to isolate the container’s view of the filesystem to its specific `rootfs`.
+* **Proc Management:** Automatically handled the mounting and unmounting of the `/proc` filesystem within each container, ensuring system utilities like `top` only display container-local information.
+
+---
+
+## Task 3: Bounded-Buffer Logging Pipeline
+The system was equipped with a high-performance logging pipeline to capture and persist container output without blocking the execution of the supervisor.
+
+### Pipeline Architecture
+* **Redirection:** Used `pipe()` and `dup2()` to redirect container `stdout` and `stderr` back to the supervisor process.
+* **Bounded Buffer:** Implemented a thread-safe, circular buffer (Producer-Consumer model) to handle log entries:
+    * **Producer:** A dedicated thread for each container reads from the pipe and "pushes" data into the buffer.
+    * **Consumer:** A central `logging_thread` "pops" data from the buffer and writes it to the `logs/` directory.
+* **Synchronization:** Utilized **POSIX semaphores** (`sem_wait`, `sem_post`) and condition variables to manage buffer access, preventing race conditions or memory overflows during high-volume logging.
+
+### Result
+* **Asynchronous I/O:** Container logging is decoupled from management tasks, preventing I/O bottlenecks.
+* **Persistence:** All container activity is preserved in individual `.log` files for post-execution analysis.
+
 
 ## Task 4: Kernel Memory Monitoring
 
